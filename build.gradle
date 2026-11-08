@@ -10,42 +10,20 @@ base {
     archivesName = project.archives_base_name
 }
 
-def payloadZip = file('payload.zip')
-def payloadDir = layout.buildDirectory.dir('payload').get().asFile
+def payloadZip = layout.projectDirectory.file('payload.zip')
+def payloadDir = layout.buildDirectory.dir('payload')
 
-if (!payloadZip.exists()) {
-    throw new GradleException("Missing payload.zip in project root: ${payloadZip}")
+if (!payloadZip.asFile.exists()) {
+    throw new GradleException("Missing payload.zip in project root: ${payloadZip.asFile}")
 }
 
 /*
- * Detect the source layout inside payload.zip.
- * Supported examples:
- *   src/main/java/...
- *   payload/src/main/java/...
- *   some-folder/src/main/java/...
+ * The uploaded ZIP layout shown in the build log is:
+ * payload/src/main/java/...
+ * payload/src/main/resources/...
  */
-def zipEntries = zipTree(payloadZip).files
-def javaFile = zipEntries.find { it.name.endsWith('.java') }
-if (javaFile == null) {
-    throw new GradleException("payload.zip does not contain any .java source files.")
-}
-
-def javaPath = javaFile.path.replace('\\', '/')
-def marker = '/src/main/java/'
-def markerIndex = javaPath.lastIndexOf(marker)
-
-def javaSourceDir
-def resourceSourceDir
-
-if (markerIndex >= 0) {
-    def prefix = javaPath.substring(0, markerIndex)
-    javaSourceDir = new File(payloadDir, prefix ? "${prefix}/src/main/java" : 'src/main/java')
-    resourceSourceDir = new File(payloadDir, prefix ? "${prefix}/src/main/resources" : 'src/main/resources')
-} else {
-    // Fallback for archives that contain Java files directly under a source folder.
-    javaSourceDir = new File(payloadDir, 'src/main/java')
-    resourceSourceDir = new File(payloadDir, 'src/main/resources')
-}
+def payloadJavaDir = payloadDir.map { it.dir('payload/src/main/java') }
+def payloadResourcesDir = payloadDir.map { it.dir('payload/src/main/resources') }
 
 tasks.register('extractPayload', Sync) {
     from(zipTree(payloadZip))
@@ -54,21 +32,27 @@ tasks.register('extractPayload', Sync) {
 
 sourceSets {
     main {
-        java.srcDir(javaSourceDir)
-        resources.srcDir(resourceSourceDir)
+        java.srcDir(payloadJavaDir)
+        resources.srcDir(payloadResourcesDir)
     }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 }
 
 tasks.named('compileJava') {
     dependsOn(tasks.named('extractPayload'))
     doFirst {
-        def sources = fileTree(javaSourceDir).matching { include '**/*.java' }.files
-        if (sources.isEmpty()) {
-            throw new GradleException(
-                "No Java sources found after extracting payload.zip. Expected sources under: ${javaSourceDir}"
-            )
+        def javaDir = payloadJavaDir.get().asFile
+        def javaFiles = fileTree(javaDir).matching { include '**/*.java' }.files
+        if (javaFiles.isEmpty()) {
+            throw new GradleException("No Java source files found in ${javaDir}. Check the internal structure of payload.zip.")
         }
-        logger.lifecycle("Compiling ${sources.size()} Java source files from ${javaSourceDir}")
+        logger.lifecycle("Compiling ${javaFiles.size()} Java source files from ${javaDir}")
     }
 }
 
@@ -81,11 +65,8 @@ tasks.named('processResources') {
     }
 }
 
-dependencies {
-    minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
-    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+tasks.named('sourcesJar') {
+    dependsOn(tasks.named('extractPayload'))
 }
 
 tasks.withType(JavaCompile).configureEach {
@@ -107,8 +88,3 @@ jar {
         into 'META-INF'
     }
 }
-
-/*
- * `build` creates the normal Fabric Loom outputs.
- * The distributable Fabric jar is normally the *remapped* jar in build/libs.
- */
