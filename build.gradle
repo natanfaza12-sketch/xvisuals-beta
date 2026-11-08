@@ -18,7 +18,7 @@ if (!payloadZip.asFile.exists()) {
 }
 
 /*
- * The uploaded ZIP layout shown in the build log is:
+ * Expected ZIP layout:
  * payload/src/main/java/...
  * payload/src/main/resources/...
  */
@@ -65,10 +65,6 @@ tasks.named('processResources') {
     }
 }
 
-tasks.named('sourcesJar') {
-    dependsOn(tasks.named('extractPayload'))
-}
-
 tasks.withType(JavaCompile).configureEach {
     options.release = 21
     options.encoding = 'UTF-8'
@@ -78,6 +74,13 @@ java {
     withSourcesJar()
     sourceCompatibility = JavaVersion.VERSION_21
     targetCompatibility = JavaVersion.VERSION_21
+}
+
+/*
+ * Register this dependency only AFTER withSourcesJar() has created sourcesJar.
+ */
+tasks.named('sourcesJar') {
+    dependsOn(tasks.named('extractPayload'))
 }
 
 jar {
