@@ -1,54 +1,114 @@
 plugins {
-	id 'fabric-loom' version '1.14.10'
-	id 'maven-publish'
+    id 'fabric-loom' version '1.14.10'
+    id 'maven-publish'
 }
 
 version = project.mod_version
 group = project.maven_group
 
 base {
-	archivesName = project.archives_base_name
+    archivesName = project.archives_base_name
 }
 
-// Rozpakowanie payload.zip (kod i zasoby) od razu przy konfiguracji.
-def payloadDir = new File(buildDir, 'payload')
-delete(payloadDir)
-ant.unzip(src: file('payload.zip'), dest: payloadDir)
+def payloadZip = file('payload.zip')
+def payloadDir = layout.buildDirectory.dir('payload').get().asFile
+
+if (!payloadZip.exists()) {
+    throw new GradleException("Missing payload.zip in project root: ${payloadZip}")
+}
+
+/*
+ * Detect the source layout inside payload.zip.
+ * Supported examples:
+ *   src/main/java/...
+ *   payload/src/main/java/...
+ *   some-folder/src/main/java/...
+ */
+def zipEntries = zipTree(payloadZip).files
+def javaFile = zipEntries.find { it.name.endsWith('.java') }
+if (javaFile == null) {
+    throw new GradleException("payload.zip does not contain any .java source files.")
+}
+
+def javaPath = javaFile.path.replace('\\', '/')
+def marker = '/src/main/java/'
+def markerIndex = javaPath.lastIndexOf(marker)
+
+def javaSourceDir
+def resourceSourceDir
+
+if (markerIndex >= 0) {
+    def prefix = javaPath.substring(0, markerIndex)
+    javaSourceDir = new File(payloadDir, prefix ? "${prefix}/src/main/java" : 'src/main/java')
+    resourceSourceDir = new File(payloadDir, prefix ? "${prefix}/src/main/resources" : 'src/main/resources')
+} else {
+    // Fallback for archives that contain Java files directly under a source folder.
+    javaSourceDir = new File(payloadDir, 'src/main/java')
+    resourceSourceDir = new File(payloadDir, 'src/main/resources')
+}
+
+tasks.register('extractPayload', Sync) {
+    from(zipTree(payloadZip))
+    into(payloadDir)
+}
 
 sourceSets {
-	main {
-		java.srcDir new File(payloadDir, 'src/main/java')
-		resources.srcDir new File(payloadDir, 'src/main/resources')
-	}
+    main {
+        java.srcDir(javaSourceDir)
+        resources.srcDir(resourceSourceDir)
+    }
+}
+
+tasks.named('compileJava') {
+    dependsOn(tasks.named('extractPayload'))
+    doFirst {
+        def sources = fileTree(javaSourceDir).matching { include '**/*.java' }.files
+        if (sources.isEmpty()) {
+            throw new GradleException(
+                "No Java sources found after extracting payload.zip. Expected sources under: ${javaSourceDir}"
+            )
+        }
+        logger.lifecycle("Compiling ${sources.size()} Java source files from ${javaSourceDir}")
+    }
+}
+
+tasks.named('processResources') {
+    dependsOn(tasks.named('extractPayload'))
+    inputs.property('version', project.version)
+
+    filesMatching('fabric.mod.json') {
+        expand(version: project.version)
+    }
 }
 
 dependencies {
-	minecraft "com.mojang:minecraft:${project.minecraft_version}"
-	mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
-	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
-	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
-}
-
-processResources {
-	inputs.property "version", project.version
-
-	filesMatching("fabric.mod.json") {
-		expand "version": inputs.properties.version
-	}
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 }
 
 tasks.withType(JavaCompile).configureEach {
-	it.options.release = 21
-	it.options.encoding = 'UTF-8'
+    options.release = 21
+    options.encoding = 'UTF-8'
 }
 
 java {
-	withSourcesJar()
-	sourceCompatibility = JavaVersion.VERSION_21
-	targetCompatibility = JavaVersion.VERSION_21
+    withSourcesJar()
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
 }
 
 jar {
-	from('LICENSE-ALATIC-MIT') { into 'META-INF/licenses' }
-	from('THIRD-PARTY-NOTICES.md') { into 'META-INF' }
+    from('LICENSE-ALATIC-MIT') {
+        into 'META-INF/licenses'
+    }
+    from('THIRD-PARTY-NOTICES.md') {
+        into 'META-INF'
+    }
 }
+
+/*
+ * `build` creates the normal Fabric Loom outputs.
+ * The distributable Fabric jar is normally the *remapped* jar in build/libs.
+ */
