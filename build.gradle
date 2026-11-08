@@ -10,8 +10,16 @@ base {
 	archivesName = project.archives_base_name
 }
 
-repositories {
-	// Fabric i Minecraft są dodawane automatycznie przez Loom.
+// Rozpakowanie payload.zip (kod i zasoby) od razu przy konfiguracji.
+def payloadDir = new File(buildDir, 'payload')
+delete(payloadDir)
+ant.unzip(src: file('payload.zip'), dest: payloadDir)
+
+sourceSets {
+	main {
+		java.srcDir new File(payloadDir, 'src/main/java')
+		resources.srcDir new File(payloadDir, 'src/main/resources')
+	}
 }
 
 dependencies {
