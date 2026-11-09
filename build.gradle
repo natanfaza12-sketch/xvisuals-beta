@@ -10,30 +10,19 @@ base {
     archivesName = project.archives_base_name
 }
 
-def payloadZip = layout.projectDirectory.file('payload.zip')
-def payloadDir = layout.buildDirectory.dir('payload')
-
-if (!payloadZip.asFile.exists()) {
-    throw new GradleException("Missing payload.zip in project root: ${payloadZip.asFile}")
+// Rozpakowanie payload.zip w czasie konfiguracji (zip ma src/main/java i src/main/resources w korzeniu)
+def payloadZipFile = file('payload.zip')
+if (!payloadZipFile.exists()) {
+    throw new GradleException("Brak payload.zip w glownym folderze repo")
 }
-
-/*
- * Expected ZIP layout:
- * payload/src/main/java/...
- * payload/src/main/resources/...
- */
-def payloadJavaDir = payloadDir.map { it.dir('payload/src/main/java') }
-def payloadResourcesDir = payloadDir.map { it.dir('payload/src/main/resources') }
-
-tasks.register('extractPayload', Sync) {
-    from(zipTree(payloadZip))
-    into(payloadDir)
-}
+def payloadOut = new File(buildDir, 'payload')
+delete(payloadOut)
+ant.unzip(src: payloadZipFile, dest: payloadOut)
 
 sourceSets {
     main {
-        java.srcDir(payloadJavaDir)
-        resources.srcDir(payloadResourcesDir)
+        java.srcDir(new File(payloadOut, 'src/main/java'))
+        resources.srcDir(new File(payloadOut, 'src/main/resources'))
     }
 }
 
@@ -44,22 +33,8 @@ dependencies {
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 }
 
-tasks.named('compileJava') {
-    dependsOn(tasks.named('extractPayload'))
-    doFirst {
-        def javaDir = payloadJavaDir.get().asFile
-        def javaFiles = fileTree(javaDir).matching { include '**/*.java' }.files
-        if (javaFiles.isEmpty()) {
-            throw new GradleException("No Java source files found in ${javaDir}. Check the internal structure of payload.zip.")
-        }
-        logger.lifecycle("Compiling ${javaFiles.size()} Java source files from ${javaDir}")
-    }
-}
-
-tasks.named('processResources') {
-    dependsOn(tasks.named('extractPayload'))
+processResources {
     inputs.property('version', project.version)
-
     filesMatching('fabric.mod.json') {
         expand(version: project.version)
     }
@@ -76,18 +51,7 @@ java {
     targetCompatibility = JavaVersion.VERSION_21
 }
 
-/*
- * Register this dependency only AFTER withSourcesJar() has created sourcesJar.
- */
-tasks.named('sourcesJar') {
-    dependsOn(tasks.named('extractPayload'))
-}
-
 jar {
-    from('LICENSE-ALATIC-MIT') {
-        into 'META-INF/licenses'
-    }
-    from('THIRD-PARTY-NOTICES.md') {
-        into 'META-INF'
-    }
+    from('LICENSE-ALATIC-MIT') { into 'META-INF/licenses' }
+    from('THIRD-PARTY-NOTICES.md') { into 'META-INF' }
 }
